@@ -1,14 +1,17 @@
-/* global $, APP, require */
+/* global $, APP, JitsiMeetJS */
 /* jshint -W101 */
-var Avatar = require("../avatar/Avatar");
-var UIUtil = require("../util/UIUtil");
-var LargeVideo = require("./LargeVideo");
-var RTCBrowserType = require("../../RTC/RTCBrowserType");
-var MediaStreamType = require("../../../service/RTC/MediaStreamTypes");
+import Avatar from "../avatar/Avatar";
+import UIUtil from "../util/UIUtil";
 
-function SmallVideo() {
+const RTCUIHelper = JitsiMeetJS.util.RTCUIHelper;
+
+function SmallVideo(VideoLayout) {
     this.isMuted = false;
     this.hasAvatar = false;
+    this.isVideoMuted = false;
+    this.videoStream = null;
+    this.audioStream = null;
+    this.VideoLayout = VideoLayout;
 }
 
 function setVisibility(selector, show) {
@@ -16,6 +19,24 @@ function setVisibility(selector, show) {
         selector.css("visibility", show ? "visible" : "hidden");
     }
 }
+
+/**
+ * Returns the identifier of this small video.
+ *
+ * @returns the identifier of this small video
+ */
+SmallVideo.prototype.getId = function () {
+    return this.id;
+};
+
+/* Indicates if this small video is currently visible.
+ *
+ * @return <tt>true</tt> if this small video isn't currently visible and
+ * <tt>false</tt> - otherwise.
+ */
+SmallVideo.prototype.isVisible = function () {
+    return $('#' + this.videoSpanId).is(':visible');
+};
 
 SmallVideo.prototype.showDisplayName = function(isShow) {
     var nameSpan = $('#' + this.videoSpanId + '>span.displayname').get(0);
@@ -29,7 +50,25 @@ SmallVideo.prototype.showDisplayName = function(isShow) {
     }
 };
 
+/**
+ * Enables / disables the device availability icons for this small video.
+ * @param {enable} set to {true} to enable and {false} to disable
+ */
+SmallVideo.prototype.enableDeviceAvailabilityIcons = function (enable) {
+    if (typeof enable === "undefined")
+        return;
+
+    this.deviceAvailabilityIconsEnabled = enable;
+};
+
+/**
+ * Sets the device "non" availability icons.
+ * @param devices the devices, which will be checked for availability
+ */
 SmallVideo.prototype.setDeviceAvailabilityIcons = function (devices) {
+    if (!this.deviceAvailabilityIconsEnabled)
+        return;
+
     if(!this.container)
         return;
 
@@ -57,7 +96,7 @@ SmallVideo.prototype.setDeviceAvailabilityIcons = function (devices) {
 
 /**
  * Sets the type of the video displayed by this instance.
- * @param videoType 'camera' or 'screen'
+ * @param videoType 'camera' or 'desktop'
  */
 SmallVideo.prototype.setVideoType = function (videoType) {
     this.videoType = videoType;
@@ -106,29 +145,36 @@ SmallVideo.prototype.setPresenceStatus = function (statusMsg) {
  * Creates an audio or video element for a particular MediaStream.
  */
 SmallVideo.createStreamElement = function (stream) {
-    var isVideo = stream.isVideoStream();
+    let isVideo = stream.isVideoTrack();
 
-    var element = isVideo ? document.createElement('video')
+    let element = isVideo
+        ? document.createElement('video')
         : document.createElement('audio');
     if (isVideo) {
         element.setAttribute("muted", "true");
     }
 
-    if (!RTCBrowserType.isIExplorer()) {
-        element.autoplay = true;
-    }
+    RTCUIHelper.setAutoPlay(element, true);
 
-    element.id = (isVideo ? 'remoteVideo_' : 'remoteAudio_') +
-        APP.RTC.getStreamID(stream.getOriginalStream());
+    element.id = SmallVideo.getStreamElementID(stream);
 
     element.onplay = function () {
-        console.log("(TIME) Render " + (isVideo ? 'video' : 'audio') + ":\t",
-                    window.performance.now());
+        var type = (isVideo ? 'video' : 'audio');
+        var now = APP.connectionTimes[type + ".render"]
+            = window.performance.now();
+        console.log("(TIME) Render " + type + ":\t",
+                    now);
     };
-
-    element.oncontextmenu = function () { return false; };
-
     return element;
+};
+
+/**
+ * Returns the element id for a particular MediaStream.
+ */
+SmallVideo.getStreamElementID = function (stream) {
+    let isVideo = stream.isVideoTrack();
+
+    return (isVideo ? 'remoteVideo_' : 'remoteAudio_') + stream.getId();
 };
 
 /**
@@ -144,8 +190,8 @@ SmallVideo.prototype.bindHoverHandler = function () {
         function () {
             // If the video has been "pinned" by the user we want to
             // keep the display name on place.
-            if (!LargeVideo.isLargeVideoVisible() ||
-                !LargeVideo.isCurrentlyOnLarge(self.getResourceJid()))
+            if (!self.VideoLayout.isLargeVideoVisible() ||
+                !self.VideoLayout.isCurrentlyOnLarge(self.id))
                 self.showDisplayName(false);
         }
     );
@@ -202,10 +248,12 @@ SmallVideo.prototype.showAudioIndicator = function(isMuted) {
 };
 
 /**
- * Shows video muted indicator over small videos.
+ * Shows video muted indicator over small videos and disables/enables avatar
+ * if video muted.
  */
-SmallVideo.prototype.showVideoIndicator = function(isMuted) {
-    this.showAvatar(isMuted);
+SmallVideo.prototype.setMutedView = function(isMuted) {
+    this.isVideoMuted = isMuted;
+    this.updateView();
 
     var videoMutedSpan = $('#' + this.videoSpanId + '>span.videoMuted');
 
@@ -232,41 +280,7 @@ SmallVideo.prototype.showVideoIndicator = function(isMuted) {
         }
 
         this.updateIconPositions();
-
     }
-};
-
-SmallVideo.prototype.enableDominantSpeaker = function (isEnable) {
-    var resourceJid = this.getResourceJid();
-    var displayName = resourceJid;
-    var nameSpan = $('#' + this.videoSpanId + '>span.displayname');
-    if (nameSpan.length > 0)
-        displayName = nameSpan.html();
-
-    console.log("UI enable dominant speaker",
-        displayName,
-        resourceJid,
-        isEnable);
-
-
-    if (!this.container) {
-        return;
-    }
-
-    if (isEnable) {
-        this.showDisplayName(LargeVideo.getState() === "video");
-
-        if (!this.container.classList.contains("dominantspeaker"))
-            this.container.classList.add("dominantspeaker");
-    }
-    else {
-        this.showDisplayName(false);
-
-        if (this.container.classList.contains("dominantspeaker"))
-            this.container.classList.remove("dominantspeaker");
-    }
-
-    this.showAvatar();
 };
 
 SmallVideo.prototype.updateIconPositions = function () {
@@ -316,43 +330,24 @@ SmallVideo.prototype.createModeratorIndicatorElement = function () {
 };
 
 SmallVideo.prototype.selectVideoElement = function () {
-    var videoElem = APP.RTC.getVideoElementName();
-    if (!RTCBrowserType.isTemasysPluginUsed()) {
-        return $('#' + this.videoSpanId).find(videoElem);
-    } else {
-        var matching = $('#' + this.videoSpanId +
-                         (this.isLocal ? '>>' : '>') +
-                         videoElem + '>param[value="video"]');
-        if (matching.length < 2) {
-            return matching.parent();
-        }
-
-        // there are 2 video objects from FF
-        // object with id which ends with '_default' (like 'remoteVideo_default')
-        // doesn't contain video, so we ignore it
-        for (var i = 0; i < matching.length; i += 1) {
-            var el = matching[i].parentNode;
-
-            // check id suffix
-            if (el.id.substr(-8) !== '_default') {
-                return $(el);
-            }
-        }
-
-        return $([]);
-    }
+    return $(RTCUIHelper.findVideoElement($('#' + this.videoSpanId)[0]));
 };
 
-SmallVideo.prototype.getSrc = function () {
-    var videoElement = this.selectVideoElement().get(0);
-    return APP.RTC.getVideoSrc(videoElement);
-};
-
+/**
+ * Enables / disables the css responsible for focusing/pinning a video
+ * thumbnail.
+ *
+ * @param isFocused indicates if the thumbnail should be focused/pinned or not
+ */
 SmallVideo.prototype.focus = function(isFocused) {
-    if(!isFocused) {
-        this.container.classList.remove("videoContainerFocused");
-    } else {
-        this.container.classList.add("videoContainerFocused");
+    var focusedCssClass = "videoContainerFocused";
+    var isFocusClassEnabled = $(this.container).hasClass(focusedCssClass);
+
+    if (!isFocused && isFocusClassEnabled) {
+        $(this.container).removeClass(focusedCssClass);
+    }
+    else if (isFocused && !isFocusClassEnabled) {
+        $(this.container).addClass(focusedCssClass);
     }
 };
 
@@ -361,66 +356,103 @@ SmallVideo.prototype.hasVideo = function () {
 };
 
 /**
- * Hides or shows the user's avatar
+ * Hides or shows the user's avatar.
+ * This update assumes that large video had been updated and we will
+ * reflect it on this small video.
+ *
  * @param show whether we should show the avatar or not
  * video because there is no dominant speaker and no focused speaker
  */
-SmallVideo.prototype.showAvatar = function (show) {
+SmallVideo.prototype.updateView = function () {
     if (!this.hasAvatar) {
-        if (this.peerJid) {
+        if (this.id) {
             // Init avatar
-            this.avatarChanged(Avatar.getAvatarUrl(this.peerJid));
+            this.avatarChanged(Avatar.getAvatarUrl(this.id));
         } else {
-            console.error("Unable to init avatar - no peerjid", this);
+            console.error("Unable to init avatar - no id", this);
             return;
         }
     }
 
-    var resourceJid = this.getResourceJid();
-    var video = this.selectVideoElement();
+    let video = this.selectVideoElement();
 
-    var avatar = $('#avatar_' + resourceJid);
+    let avatar = $(`#avatar_${this.id}`);
 
-    if (show === undefined || show === null) {
-        if (!this.isLocal &&
-            !this.VideoLayout.isInLastN(resourceJid)) {
-            show = true;
-        } else {
-            // We want to show the avatar when the video is muted or not exists
-            // that is when 'true' or 'null' is returned
-            show = APP.RTC.isVideoMuted(this.peerJid) !== false;
-        }
-    }
+    var isCurrentlyOnLarge = this.VideoLayout.isCurrentlyOnLarge(this.id);
 
-    if (LargeVideo.showAvatar(resourceJid, show)) {
-        setVisibility(avatar, false);
-        setVisibility(video, false);
+    var showVideo = !this.isVideoMuted && !isCurrentlyOnLarge;
+    var showAvatar;
+    if ((!this.isLocal
+            && !this.VideoLayout.isInLastN(this.id))
+        || this.isVideoMuted) {
+        showAvatar = true;
     } else {
-        if (video && video.length > 0) {
-            setVisibility(video, !show);
-        }
-        setVisibility(avatar, show);
+        // We want to show the avatar when the video is muted or not exists
+        // that is when 'true' or 'null' is returned
+        showAvatar = !this.videoStream || this.videoStream.isMuted();
     }
+
+    showAvatar = showAvatar && !isCurrentlyOnLarge;
+
+    if (video && video.length > 0) {
+        setVisibility(video, showVideo);
+    }
+    setVisibility(avatar, showAvatar);
+
+    this.showDisplayName(!showVideo && !showAvatar);
 };
 
-SmallVideo.prototype.avatarChanged = function (thumbUrl) {
+SmallVideo.prototype.avatarChanged = function (avatarUrl) {
     var thumbnail = $('#' + this.videoSpanId);
-    var resourceJid = this.getResourceJid();
-    var avatar = $('#avatar_' + resourceJid);
+    var avatar = $('#avatar_' + this.id);
     this.hasAvatar = true;
 
     // set the avatar in the thumbnail
     if (avatar && avatar.length > 0) {
-        avatar[0].src = thumbUrl;
+        avatar[0].src = avatarUrl;
     } else {
         if (thumbnail && thumbnail.length > 0) {
             avatar = document.createElement('img');
-            avatar.id = 'avatar_' + resourceJid;
+            avatar.id = 'avatar_' + this.id;
             avatar.className = 'userAvatar';
-            avatar.src = thumbUrl;
+            avatar.src = avatarUrl;
             thumbnail.append(avatar);
         }
     }
 };
 
-module.exports = SmallVideo;
+/**
+ * Updates the Indicator for dominant speaker.
+ *
+ * @param isSpeaker indicates the current indicator state
+ */
+SmallVideo.prototype.updateDominantSpeakerIndicator = function (isSpeaker) {
+
+    if (!this.container) {
+        console.warn( "Unable to set dominant speaker indicator - "
+            + this.videoSpanId + " does not exist");
+        return;
+    }
+
+    var indicatorSpan
+        = $('#' + this.videoSpanId + '>span.dominantspeakerindicator');
+
+    // If we do not have an indicator for this video.
+    if (indicatorSpan.length <= 0) {
+        indicatorSpan = document.createElement('span');
+
+        indicatorSpan.innerHTML
+            = "<i id='speakerindicatoricon' class='fa fa-bullhorn'></i>";
+        indicatorSpan.className = 'dominantspeakerindicator';
+
+        $('#' + this.videoSpanId)[0].appendChild(indicatorSpan);
+
+        // adds a tooltip
+        UIUtil.setTooltip(indicatorSpan, "speaker", "left");
+        APP.translation.translateElement($(indicatorSpan));
+    }
+
+    $(indicatorSpan).css("visibility", isSpeaker ? "visible" : "hidden");
+};
+
+export default SmallVideo;

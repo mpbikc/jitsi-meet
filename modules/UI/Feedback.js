@@ -1,11 +1,5 @@
-/* global $, config, interfaceConfig */
-
-/*
- * Created by Yana Stamcheva on 2/10/15.
- */
-var messageHandler = require("./util/MessageHandler");
-var callStats = require("../statistics/CallStats");
-var APP = require("../../app");
+/* global $, APP, config, interfaceConfig */
+import UIEvents from "../../service/UI/UIEvents";
 
 /**
  * Constructs the html for the overall feedback window.
@@ -63,6 +57,29 @@ var constructDetailedFeedbackHtml = function() {
 var feedbackWindowCallback = null;
 
 /**
+ * Shows / hides the feedback button.
+ * @private
+ */
+function _toggleFeedbackIcon() {
+    $('#feedbackButtonDiv').toggleClass("hidden");
+}
+
+/**
+ * Shows / hides the feedback button.
+ * @param {show} set to {true} to show the feedback button or to  {false}
+ * to hide it
+ * @private
+ */
+function _showFeedbackButton (show) {
+    var feedbackButton = $("#feedbackButtonDiv");
+
+    if (show)
+        feedbackButton.css("display", "block");
+    else
+        feedbackButton.css("display", "none");
+}
+
+/**
  * Defines all methods in connection to the Feedback window.
  *
  * @type {{feedbackScore: number, openFeedbackWindow: Function,
@@ -75,25 +92,47 @@ var Feedback = {
     feedbackScore: -1,
     /**
      * Initialise the Feedback functionality.
+     * @param emitter the EventEmitter to associate with the Feedback.
      */
-    init: function () {
+    init: function (emitter) {
         // CallStats is the way we send feedback, so we don't have to initialise
         // if callstats isn't enabled.
-        if (!callStats.isEnabled())
+        if (!APP.conference.isCallstatsEnabled())
             return;
 
-        $("div.feedbackButton").css("display", "block");
+        // If enabled property is still undefined, i.e. it hasn't been set from
+        // some other module already, we set it to true by default.
+        if (typeof this.enabled == "undefined")
+            this.enabled = true;
+
+        _showFeedbackButton(this.enabled);
+
         $("#feedbackButton").click(function (event) {
             Feedback.openFeedbackWindow();
         });
+
+        // Show / hide the feedback button whenever the film strip is
+        // shown / hidden.
+        emitter.addListener(UIEvents.TOGGLE_FILM_STRIP, function () {
+            _toggleFeedbackIcon();
+        });
     },
+    /**
+     * Enables/ disabled the feedback feature.
+     */
+    enableFeedback: function (enable) {
+        if (this.enabled !== enable)
+            _showFeedbackButton(enable);
+        this.enabled = enable;
+    },
+
     /**
      * Indicates if the feedback functionality is enabled.
      *
      * @return true if the feedback functionality is enabled, false otherwise.
      */
     isEnabled: function() {
-        return callStats.isEnabled();
+        return this.enabled && APP.conference.isCallstatsEnabled();
     },
     /**
      * Opens the feedback window.
@@ -119,7 +158,7 @@ var Feedback = {
                     // If the feedback is less than 3 stars we're going to
                     // ask the user for more information.
                     if (Feedback.feedbackScore > 3) {
-                        callStats.sendFeedback(Feedback.feedbackScore, "");
+                        APP.conference.sendFeedback(Feedback.feedbackScore, "");
                         if (feedbackWindowCallback)
                             feedbackWindowCallback();
                         else
@@ -161,7 +200,7 @@ var Feedback = {
                             = document.getElementById("feedbackTextArea").value;
 
                         if (feedbackDetails && feedbackDetails.length > 0)
-                            callStats.sendFeedback( Feedback.feedbackScore,
+                            APP.conference.sendFeedback( Feedback.feedbackScore,
                                                     feedbackDetails);
 
                         if (feedbackWindowCallback)

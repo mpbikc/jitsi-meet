@@ -1,25 +1,20 @@
-/* global $, APP, require, Strophe, interfaceConfig */
-var ConnectionIndicator = require("./ConnectionIndicator");
-var SmallVideo = require("./SmallVideo");
-var AudioLevels = require("../audio_levels/AudioLevels");
-var MediaStreamType = require("../../../service/RTC/MediaStreamTypes");
-var RTCBrowserType = require("../../RTC/RTCBrowserType");
-var UIUtils = require("../util/UIUtil");
-var XMPPEvents = require("../../../service/xmpp/XMPPEvents");
+/* global $, APP, interfaceConfig */
 
-function RemoteVideo(peerJid, VideoLayout) {
-    this.peerJid = peerJid;
-    this.resourceJid = Strophe.getResourceFromJid(peerJid);
-    this.videoSpanId = 'participant_' + this.resourceJid;
-    this.VideoLayout = VideoLayout;
+import ConnectionIndicator from './ConnectionIndicator';
+
+import SmallVideo from "./SmallVideo";
+import AudioLevels from "../audio_levels/AudioLevels";
+import UIUtils from "../util/UIUtil";
+import UIEvents from '../../../service/UI/UIEvents';
+
+function RemoteVideo(id, VideoLayout, emitter) {
+    this.id = id;
+    this.emitter = emitter;
+    this.videoSpanId = `participant_${id}`;
+    SmallVideo.call(this, VideoLayout);
     this.addRemoteVideoContainer();
-    this.connectionIndicator = new ConnectionIndicator(
-        this, this.peerJid);
+    this.connectionIndicator = new ConnectionIndicator(this, id);
     this.setDisplayName();
-    var nickfield = document.createElement('span');
-    nickfield.className = "nick";
-    nickfield.appendChild(document.createTextNode(this.resourceJid));
-    this.container.appendChild(nickfield);
     this.bindHoverHandler();
     this.flipX = false;
     this.isLocal = false;
@@ -30,21 +25,22 @@ RemoteVideo.prototype.constructor = RemoteVideo;
 
 RemoteVideo.prototype.addRemoteVideoContainer = function() {
     this.container = RemoteVideo.createContainer(this.videoSpanId);
-    if (APP.xmpp.isModerator())
+    if (APP.conference.isModerator) {
         this.addRemoteVideoMenu();
-    AudioLevels.updateAudioLevelCanvas(this.peerJid, this.VideoLayout);
+    }
+    let {thumbWidth, thumbHeight} = this.VideoLayout.resizeThumbnails();
+    AudioLevels.updateAudioLevelCanvas(this.id, thumbWidth, thumbHeight);
 
     return this.container;
 };
 
 /**
- * Adds the remote video menu element for the given <tt>jid</tt> in the
+ * Adds the remote video menu element for the given <tt>id</tt> in the
  * given <tt>parentElement</tt>.
  *
- * @param jid the jid indicating the video for which we're adding a menu.
+ * @param id the id indicating the video for which we're adding a menu.
  * @param parentElement the parent element where this menu will be added
  */
-
 if (!interfaceConfig.filmStripOnly) {
     RemoteVideo.prototype.addRemoteVideoMenu = function () {
         var spanElement = document.createElement('span');
@@ -60,7 +56,7 @@ if (!interfaceConfig.filmStripOnly) {
 
         var popupmenuElement = document.createElement('ul');
         popupmenuElement.className = 'popupmenu';
-        popupmenuElement.id = 'remote_popupmenu_' + this.getResourceJid();
+        popupmenuElement.id = `remote_popupmenu_${this.id}`;
         spanElement.appendChild(popupmenuElement);
 
         var muteMenuItem = document.createElement('li');
@@ -82,13 +78,12 @@ if (!interfaceConfig.filmStripOnly) {
             muteLinkItem.className = 'mutelink disabled';
         }
 
-        var self = this;
-        muteLinkItem.onclick = function(){
+        muteLinkItem.onclick = (event) => {
             if ($(this).attr('disabled')) {
                 event.preventDefault();
             }
-            var isMute = !!self.isMuted;
-            APP.xmpp.setMute(self.peerJid, !isMute);
+            var isMute = !!this.isMuted;
+            this.emitter.emit(UIEvents.REMOTE_AUDIO_MUTED, this.id);
 
             popupmenuElement.setAttribute('style', 'display:none;');
 
@@ -116,8 +111,8 @@ if (!interfaceConfig.filmStripOnly) {
         var ejectText = "<div style='width: 90px;margin-left: 20px;' " +
             "data-i18n='videothumbnail.kick'>&nbsp;</div>";
         ejectLinkItem.innerHTML = ejectIndicator + ' ' + ejectText;
-        ejectLinkItem.onclick = function(){
-            APP.xmpp.eject(self.peerJid);
+        ejectLinkItem.onclick = (event) => {
+            this.emitter.emit(UIEvents.USER_KICKED, this.id);
             popupmenuElement.setAttribute('style', 'display:none;');
         };
 
@@ -139,17 +134,19 @@ if (!interfaceConfig.filmStripOnly) {
  * Removes the remote stream element corresponding to the given stream and
  * parent container.
  *
- * @param stream the stream
+ * @param stream the MediaStream
  * @param isVideo <tt>true</tt> if given <tt>stream</tt> is a video one.
  */
-RemoteVideo.prototype.removeRemoteStreamElement =
-    function (stream, isVideo, id) {
+RemoteVideo.prototype.removeRemoteStreamElement = function (stream) {
     if (!this.container)
         return false;
 
+    var isVideo = stream.isVideoTrack();
+
+    var elementID = SmallVideo.getStreamElementID(stream);
     var select = null;
     if (isVideo) {
-        select = $('#' + id);
+        select = $('#' + elementID);
     }
     else
         select = $('#' + this.videoSpanId + '>audio');
@@ -157,92 +154,76 @@ RemoteVideo.prototype.removeRemoteStreamElement =
     select.remove();
 
     console.info((isVideo ? "Video" : "Audio") +
-                 " removed " + this.getResourceJid(), select);
+                 " removed " + this.id, select);
 
-    if (isVideo)
-        this.VideoLayout.updateRemovedVideo(this.getResourceJid());
+    // when removing only the video element and we are on stage
+    // update the stage
+    if (isVideo && this.VideoLayout.isCurrentlyOnLarge(this.id))
+        this.VideoLayout.updateLargeVideo(this.id);
 };
 
 /**
  * Removes RemoteVideo from the page.
  */
 RemoteVideo.prototype.remove = function () {
-    console.log("Remove thumbnail", this.peerJid);
+    console.log("Remove thumbnail", this.id);
     this.removeConnectionIndicator();
     // Make sure that the large video is updated if are removing its
     // corresponding small video.
-    this.VideoLayout.updateRemovedVideo(this.getResourceJid());
+    this.VideoLayout.updateAfterThumbRemoved(this.id);
     // Remove whole container
-    if (this.container.parentNode)
+    if (this.container.parentNode) {
         this.container.parentNode.removeChild(this.container);
+    }
 };
 
-RemoteVideo.prototype.waitForPlayback = function (sel, stream) {
+RemoteVideo.prototype.waitForPlayback = function (streamElement, stream) {
 
     var webRtcStream = stream.getOriginalStream();
-    var isVideo = stream.isVideoStream();
+    var isVideo = stream.isVideoTrack();
     if (!isVideo || webRtcStream.id === 'mixedmslabel') {
         return;
     }
 
     var self = this;
-    var resourceJid = this.getResourceJid();
 
     // Register 'onplaying' listener to trigger 'videoactive' on VideoLayout
     // when video playback starts
     var onPlayingHandler = function () {
-        // FIXME: why do i have to do this for FF?
-        if (RTCBrowserType.isFirefox()) {
-            APP.RTC.attachMediaStream(sel, webRtcStream);
-        }
-        if (RTCBrowserType.isTemasysPluginUsed()) {
-            sel = self.selectVideoElement();
-        }
-        self.VideoLayout.videoactive(sel, resourceJid);
-        sel[0].onplaying = null;
-        if (RTCBrowserType.isTemasysPluginUsed()) {
-            // 'currentTime' is used to check if the video has started
-            // and the value is not set by the plugin, so we do it
-            sel[0].currentTime = 1;
-        }
+        self.VideoLayout.videoactive(streamElement, self.id);
+        streamElement.onplaying = null;
     };
-    sel[0].onplaying = onPlayingHandler;
+    streamElement.onplaying = onPlayingHandler;
+};
+
+/**
+ * Checks whether or not video stream exists and has started for this
+ * RemoteVideo instance. This is checked by trying to select video element in
+ * this container and checking if 'currentTime' field's value is greater than 0.
+ *
+ * @returns {*|boolean} true if this RemoteVideo has active video stream running
+ */
+RemoteVideo.prototype.hasVideoStarted = function () {
+    var videoSelector = this.selectVideoElement();
+    return videoSelector.length && videoSelector[0].currentTime > 0;
 };
 
 RemoteVideo.prototype.addRemoteStreamElement = function (stream) {
-    if (!this.container)
+    if (!this.container) {
         return;
-
-    var self = this;
-    var webRtcStream = stream.getOriginalStream();
-    var isVideo = stream.isVideoStream();
-    var streamElement = SmallVideo.createStreamElement(stream);
-    var newElementId = streamElement.id;
-
-    // Put new stream element always in front
-    UIUtils.prependChild(this.container, streamElement);
-
-    var sel = $('#' + newElementId);
-    sel.hide();
-
-    // If the container is currently visible we attach the stream.
-    if (!isVideo || (this.container.offsetParent !== null && isVideo)) {
-        this.waitForPlayback(sel, stream);
-
-        APP.RTC.attachMediaStream(sel, webRtcStream);
     }
 
-    APP.RTC.addMediaStreamInactiveHandler(
-        webRtcStream, function () {
-            console.log('stream ended', this);
-
-            self.removeRemoteStreamElement(webRtcStream, isVideo, newElementId);
-    });
+    let isVideo = stream.isVideoTrack();
+    isVideo ? this.videoStream = stream : this.audioStream = stream;
 
     // Add click handler.
-    var onClickHandler = function (event) {
+    let onClickHandler = (event) => {
+        let source = event.target || event.srcElement;
 
-        self.VideoLayout.handleVideoThumbClicked(false, self.getResourceJid());
+        // ignore click if it was done in popup menu
+        if ($(source).parents('.popupmenu').length === 0) {
+            this.VideoLayout.handleVideoThumbClicked(this.id);
+        }
 
         // On IE we need to populate this handler on video <object>
         // and it does not give event instance as an argument,
@@ -254,14 +235,35 @@ RemoteVideo.prototype.addRemoteStreamElement = function (stream) {
         return false;
     };
     this.container.onclick = onClickHandler;
-    // reselect
-    if (RTCBrowserType.isTemasysPluginUsed())
-        sel = $('#' + newElementId);
-    sel[0].onclick = onClickHandler;
+
+    if(!stream.getOriginalStream())
+        return;
+
+    let streamElement = SmallVideo.createStreamElement(stream);
+    let newElementId = streamElement.id;
+
+    // Put new stream element always in front
+    UIUtils.prependChild(this.container, streamElement);
+
+    // If we hide element when Temasys plugin is used then
+    // we'll never receive 'onplay' event and other logic won't work as expected
+    // NOTE: hiding will not have effect when Temasys plugin is in use, as
+    // calling attach will show it back
+    $(streamElement).hide();
+
+    // If the container is currently visible
+    // we attach the stream to the element.
+    if (!isVideo || (this.container.offsetParent !== null && isVideo)) {
+        this.waitForPlayback(streamElement, stream);
+
+        streamElement = stream.attach(streamElement);
+    }
+
+    $(streamElement).click(onClickHandler);
 },
 
 /**
- * Show/hide peer container for the given resourceJid.
+ * Show/hide peer container for the given id.
  */
 RemoteVideo.prototype.showPeerContainer = function (state) {
     if (!this.container)
@@ -275,10 +277,10 @@ RemoteVideo.prototype.showPeerContainer = function (state) {
             resizeThumbnails = true;
             $(this.container).show();
         }
-        // Call showAvatar with undefined, so that we'll figure out if avatar
+        // Call updateView, so that we'll figure out if avatar
         // should be displayed based on video muted status and whether or not
         // it's in the lastN set
-        this.showAvatar(undefined);
+        this.updateView();
     }
     else if ($(this.container).is(':visible') && isHide)
     {
@@ -294,8 +296,14 @@ RemoteVideo.prototype.showPeerContainer = function (state) {
 
     // We want to be able to pin a participant from the contact list, even
     // if he's not in the lastN set!
-    // ContactList.setClickable(resourceJid, !isHide);
+    // ContactList.setClickable(id, !isHide);
 
+};
+
+RemoteVideo.prototype.updateResolution = function (resolution) {
+    if (this.connectionIndicator) {
+        this.connectionIndicator.updateResolution(resolution);
+    }
 };
 
 RemoteVideo.prototype.removeConnectionIndicator = function () {
@@ -311,12 +319,11 @@ RemoteVideo.prototype.hideConnectionIndicator = function () {
 /**
  * Updates the remote video menu.
  *
- * @param jid the jid indicating the video for which we're adding a menu.
+ * @param id the id indicating the video for which we're adding a menu.
  * @param isMuted indicates the current mute state
  */
 RemoteVideo.prototype.updateRemoteVideoMenu = function (isMuted) {
-    var muteMenuItem
-        = $('#remote_popupmenu_' + this.getResourceJid() + '>li>a.mutelink');
+    var muteMenuItem = $(`#remote_popupmenu_${this.id}>li>a.mutelink`);
 
     var mutedIndicator = "<i class='icon-mic-disabled'></i>";
 
@@ -335,41 +342,6 @@ RemoteVideo.prototype.updateRemoteVideoMenu = function (isMuted) {
 };
 
 /**
- * Updates the Indicator for dominant speaker.
- *
- * @param isSpeaker indicates the current indicator state
- */
-RemoteVideo.prototype.updateDominantSpeakerIndicator = function (isSpeaker) {
-
-    if (!this.container) {
-        console.warn( "Unable to set dominant speaker indicator - "
-            + this.videoSpanId + " does not exist");
-        return;
-    }
-
-    var indicatorSpan
-        = $('#' + this.videoSpanId + '>span.dominantspeakerindicator');
-
-    // If we do not have an indicator for this video.
-    if (indicatorSpan.length <= 0) {
-        indicatorSpan = document.createElement('span');
-
-        indicatorSpan.innerHTML
-            = "<i id='speakerindicatoricon' class='fa fa-bullhorn'></i>";
-        indicatorSpan.className = 'dominantspeakerindicator';
-
-        $('#' + this.videoSpanId)[0].appendChild(indicatorSpan);
-
-        // adds a tooltip
-        UIUtils.setTooltip(indicatorSpan, "speaker", "left");
-        APP.translation.translateElement($(indicatorSpan));
-    }
-
-    $(indicatorSpan).css("visibility", isSpeaker ? "visible" : "hidden");
-};
-
-
-/**
  * Sets the display name for the given video span id.
  */
 RemoteVideo.prototype.setDisplayName = function(displayName, key) {
@@ -385,7 +357,9 @@ RemoteVideo.prototype.setDisplayName = function(displayName, key) {
     // If we already have a display name for this video.
     if (nameSpan.length > 0) {
         if (displayName && displayName.length > 0) {
-            $('#' + this.videoSpanId + '_name').html(displayName);
+            var displaynameSpan = $('#' + this.videoSpanId + '_name');
+            if (displaynameSpan.text() !== displayName)
+                displaynameSpan.text(displayName);
         }
         else if (key && key.length > 0) {
             var nameHtml = APP.translation.generateTranslationHTML(key);
@@ -399,13 +373,11 @@ RemoteVideo.prototype.setDisplayName = function(displayName, key) {
         nameSpan.className = 'displayname';
         $('#' + this.videoSpanId)[0].appendChild(nameSpan);
 
-
         if (displayName && displayName.length > 0) {
-            nameSpan.innerText = displayName;
+            $(nameSpan).text(displayName);
+        } else {
+            nameSpan.innerHTML = interfaceConfig.DEFAULT_REMOTE_DISPLAY_NAME;
         }
-        else
-            nameSpan.innerText = interfaceConfig.DEFAULT_REMOTE_DISPLAY_NAME;
-
         nameSpan.id = this.videoSpanId + '_name';
     }
 };
@@ -423,13 +395,6 @@ RemoteVideo.prototype.removeRemoteVideoMenu = function() {
     }
 };
 
-RemoteVideo.prototype.getResourceJid = function () {
-    if (!this.resourceJid) {
-        console.error("Undefined resource jid");
-    }
-    return this.resourceJid;
-};
-
 RemoteVideo.createContainer = function (spanId) {
     var container = document.createElement('span');
     container.id = spanId;
@@ -439,4 +404,4 @@ RemoteVideo.createContainer = function (spanId) {
 };
 
 
-module.exports = RemoteVideo;
+export default RemoteVideo;

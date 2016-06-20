@@ -1,10 +1,10 @@
 /* global APP, require */
 /* jshint -W101 */
-var EventEmitter = require("events");
-var eventEmitter = new EventEmitter();
-var CQEvents = require("../../service/connectionquality/CQEvents");
-var XMPPEvents = require("../../service/xmpp/XMPPEvents");
-var StatisticsEvents = require("../../service/statistics/Events");
+import EventEmitter from "events";
+
+import CQEvents from "../../service/connectionquality/CQEvents";
+
+const eventEmitter = new EventEmitter();
 
 /**
  * local stats
@@ -19,41 +19,14 @@ var stats = {};
 var remoteStats = {};
 
 /**
- * Interval for sending statistics to other participants
- * @type {null}
+ * Quality percent( 100% - good, 0% - bad.) for the local user.
  */
-var sendIntervalId = null;
-
+var localConnectionQuality = 100;
 
 /**
- * Start statistics sending.
+ * Quality percent( 100% - good, 0% - bad.) stored per id.
  */
-function startSendingStats() {
-    sendStats();
-    sendIntervalId = setInterval(sendStats, 10000);
-}
-
-/**
- * Sends statistics to other participants
- */
-function sendStats() {
-    APP.xmpp.addToPresence("connectionQuality", convertToMUCStats(stats));
-}
-
-/**
- * Converts statistics to format for sending through XMPP
- * @param stats the statistics
- * @returns {{bitrate_donwload: *, bitrate_uplpoad: *, packetLoss_total: *, packetLoss_download: *, packetLoss_upload: *}}
- */
-function convertToMUCStats(stats) {
-    return {
-        "bitrate_download": stats.bitrate.download,
-        "bitrate_upload": stats.bitrate.upload,
-        "packetLoss_total": stats.packetLoss.total,
-        "packetLoss_download": stats.packetLoss.download,
-        "packetLoss_upload": stats.packetLoss.upload
-    };
-}
+var remoteConnectionQuality = {};
 
 /**
  * Converts statistics to format used by VideoLayout
@@ -61,64 +34,76 @@ function convertToMUCStats(stats) {
  * @returns {{bitrate: {download: *, upload: *}, packetLoss: {total: *, download: *, upload: *}}}
  */
 function parseMUCStats(stats) {
+    if(!stats || !stats.children || !stats.children.length)
+        return null;
+    var children = stats.children;
+    var extractedStats = {};
+    children.forEach((child) => {
+        if(child.tagName !== "stat" || !child.attributes)
+            return;
+        var attrKeys = Object.keys(child.attributes);
+        if(!attrKeys || !attrKeys.length)
+            return;
+        attrKeys.forEach((attr) => {
+            extractedStats[attr] = child.attributes[attr];
+        });
+    });
     return {
         bitrate: {
-            download: stats.bitrate_download,
-            upload: stats.bitrate_upload
+            download: extractedStats.bitrate_download,
+            upload: extractedStats.bitrate_upload
         },
         packetLoss: {
-            total: stats.packetLoss_total,
-            download: stats.packetLoss_download,
-            upload: stats.packetLoss_upload
+            total: extractedStats.packetLoss_total,
+            download: extractedStats.packetLoss_download,
+            upload: extractedStats.packetLoss_upload
         }
     };
 }
 
-var ConnectionQuality = {
-    init: function () {
-        APP.xmpp.addListener(XMPPEvents.REMOTE_STATS, this.updateRemoteStats);
-        APP.statistics.addListener(StatisticsEvents.CONNECTION_STATS,
-                                   this.updateLocalStats);
-        APP.statistics.addListener(StatisticsEvents.STOP,
-                                   this.stopSendingStats);
-    },
+/**
+ * Calculates the quality percent based on passed new and old value.
+ * @param newVal the new value
+ * @param oldVal the old value
+ */
+function calculateQuality(newVal, oldVal) {
+    return (newVal <= oldVal) ? newVal : (9*oldVal + newVal) / 10;
+}
 
+export default {
     /**
      * Updates the local statistics
      * @param data new statistics
      */
     updateLocalStats: function (data) {
         stats = data;
-        eventEmitter.emit(CQEvents.LOCALSTATS_UPDATED, 100 - stats.packetLoss.total, stats);
-        if (!sendIntervalId) {
-            startSendingStats();
-        }
+        var newVal = 100 - stats.packetLoss.total;
+        localConnectionQuality =
+            calculateQuality(newVal, localConnectionQuality);
+        eventEmitter.emit(CQEvents.LOCALSTATS_UPDATED, localConnectionQuality,
+            stats);
     },
 
     /**
      * Updates remote statistics
-     * @param jid the jid associated with the statistics
+     * @param id the id associated with the statistics
      * @param data the statistics
      */
-    updateRemoteStats: function (jid, data) {
-        if (!data || !data.packetLoss_total) {
-            eventEmitter.emit(CQEvents.REMOTESTATS_UPDATED, jid, null, null);
+    updateRemoteStats: function (id, data) {
+        data = parseMUCStats(data);
+        if (!data || !data.packetLoss || !data.packetLoss.total) {
+            eventEmitter.emit(CQEvents.REMOTESTATS_UPDATED, id, null, null);
             return;
         }
-        remoteStats[jid] = parseMUCStats(data);
+        remoteStats[id] = data;
 
-        eventEmitter.emit(CQEvents.REMOTESTATS_UPDATED,
-            jid, 100 - data.packetLoss_total, remoteStats[jid]);
-    },
+        var newVal = 100 - data.packetLoss.total;
+        var oldVal = remoteConnectionQuality[id];
+        remoteConnectionQuality[id] = calculateQuality(newVal, oldVal);
 
-    /**
-     * Stops statistics sending.
-     */
-    stopSendingStats: function () {
-        clearInterval(sendIntervalId);
-        sendIntervalId = null;
-        //notify UI about stopping statistics gathering
-        eventEmitter.emit(CQEvents.STOP);
+        eventEmitter.emit(
+            CQEvents.REMOTESTATS_UPDATED, id, remoteConnectionQuality[id],
+            remoteStats[id]);
     },
 
     /**
@@ -127,11 +112,27 @@ var ConnectionQuality = {
     getStats: function () {
         return stats;
     },
-    
+
     addListener: function (type, listener) {
         eventEmitter.on(type, listener);
+    },
+
+    /**
+     * Converts statistics to format for sending through XMPP
+     * @param stats the statistics
+     * @returns [{tagName: "stat", attributes: {{bitrate_donwload: *}},
+     * {tagName: "stat", attributes: {{ bitrate_uplpoad: *}},
+     * {tagName: "stat", attributes: {{ packetLoss_total: *}},
+     * {tagName: "stat", attributes: {{ packetLoss_download: *}},
+     * {tagName: "stat", attributes: {{ packetLoss_upload: *}}]
+     */
+    convertToMUCStats: function (stats) {
+        return [
+            {tagName: "stat", attributes: {"bitrate_download": stats.bitrate.download}},
+            {tagName: "stat", attributes: {"bitrate_upload": stats.bitrate.upload}},
+            {tagName: "stat", attributes: {"packetLoss_total": stats.packetLoss.total}},
+            {tagName: "stat", attributes: {"packetLoss_download": stats.packetLoss.download}},
+            {tagName: "stat", attributes: {"packetLoss_upload": stats.packetLoss.upload}}
+        ];
     }
-
 };
-
-module.exports = ConnectionQuality;

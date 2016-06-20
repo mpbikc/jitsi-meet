@@ -5,7 +5,7 @@
  * applications that embed Jitsi Meet
  */
 
-var XMPPEvents = require("../../service/xmpp/XMPPEvents");
+ import postis from 'postis';
 
 /**
  * List of the available commands.
@@ -18,13 +18,34 @@ var XMPPEvents = require("../../service/xmpp/XMPPEvents");
  *              toggleContactList: toggleContactList
  *          }}
  */
-var commands = {};
+let commands = {};
+
+/**
+ * Object that will execute sendMessage
+ */
+let target = window.opener ? window.opener : window.parent;
+
+/**
+ * Array of functions that are going to receive the objects passed to this
+ * window
+ */
+let messageListeners = [];
+
+/**
+ * Current status (enabled/disabled) of Postis.
+ */
+let enablePostis = false;
+
+/**
+ * Current status (enabled/disabled) of Post Message API.
+ */
+let enablePostMessage = false;
 
 function initCommands() {
     commands = {
         displayName: APP.UI.inputDisplayNameHandler,
-        toggleAudio: APP.UI.toggleAudio,
-        toggleVideo: APP.UI.toggleVideo,
+        toggleAudio: APP.conference.toggleAudioMuted,
+        toggleVideo: APP.conference.toggleVideoMuted,
         toggleFilmStrip: APP.UI.toggleFilmStrip,
         toggleChat: APP.UI.toggleChat,
         toggleContactList: APP.UI.toggleContactList
@@ -43,15 +64,13 @@ function initCommands() {
  *              participantLeft: boolean
  *      }}
  */
-var events = {
+const events = {
     incomingMessage: false,
     outgoingMessage:false,
     displayNameChange: false,
     participantJoined: false,
     participantLeft: false
 };
-
-var displayName = {};
 
 /**
  * Processes commands from external application.
@@ -96,14 +115,6 @@ function processEvent(event) {
 }
 
 /**
- * Sends message to the external application.
- * @param object
- */
-function sendMessage(object) {
-    window.parent.postMessage(JSON.stringify(object), "*");
-}
-
-/**
  * Processes a message event from the external application
  * @param event the message event
  */
@@ -111,10 +122,11 @@ function processMessage(event) {
     var message;
     try {
         message = JSON.parse(event.data);
-    } catch (e) {}
-
-    if(!message.type)
+    } catch (e) {
+        console.error("Cannot parse data", event.data);
         return;
+    }
+
     switch (message.type) {
         case "command":
             processCommand(message);
@@ -123,100 +135,178 @@ function processMessage(event) {
             processEvent(message);
             break;
         default:
-            console.error("Unknown type of the message");
-            return;
+            console.warn("Unknown message type");
     }
 }
 
-function setupListeners() {
-    APP.xmpp.addListener(XMPPEvents.MUC_MEMBER_JOINED, function (from) {
-        API.triggerEvent("participantJoined", {jid: from});
-    });
-    APP.xmpp.addListener(XMPPEvents.MESSAGE_RECEIVED,
-                         function (from, nick, txt, myjid, stamp) {
-        if (from != myjid)
-            API.triggerEvent("incomingMessage",
-                {"from": from, "nick": nick, "message": txt, "stamp": stamp});
-    });
-    APP.xmpp.addListener(XMPPEvents.MUC_MEMBER_LEFT, function (jid) {
-        API.triggerEvent("participantLeft", {jid: jid});
-    });
-    APP.xmpp.addListener(XMPPEvents.DISPLAY_NAME_CHANGED,
-                         function (jid, newDisplayName) {
-        var name = displayName[jid];
-        if(!name || name != newDisplayName) {
-            API.triggerEvent("displayNameChange",
-                             {jid: jid, displayname: newDisplayName});
-            displayName[jid] = newDisplayName;
-        }
-    });
-    APP.xmpp.addListener(XMPPEvents.SENDING_CHAT_MESSAGE, function (body) {
-        APP.API.triggerEvent("outgoingMessage", {"message": body});
-    });
+/**
+ * Sends message to the external application.
+ * @param object {object} the object that will be sent as JSON string
+ */
+function sendMessage(object) {
+    if(enablePostMessage)
+        target.postMessage(JSON.stringify(object), "*");
 }
 
-var API = {
-    /**
-     * Check whether the API should be enabled or not.
-     * @returns {boolean}
-     */
-    isEnabled: function () {
-        var hash = location.hash;
-        if (hash && hash.indexOf("external") > -1 && window.postMessage)
-            return true;
-        return false;
-    },
+/**
+ * Check whether the API should be enabled or not.
+ * @returns {boolean}
+ */
+function isEnabled () {
+    let hash = location.hash;
+    return !!(hash && hash.indexOf("external=true") > -1 && window.postMessage);
+}
+
+/**
+ * Checks whether the event is enabled ot not.
+ * @param name the name of the event.
+ * @returns {*}
+ */
+function isEventEnabled (name) {
+    return events[name];
+}
+
+/**
+ * Sends event object to the external application that has been subscribed
+ * for that event.
+ * @param name the name event
+ * @param object data associated with the event
+ */
+function triggerEvent (name, object) {
+    if (isEventEnabled(name) && enablePostMessage) {
+        sendMessage({
+            type: "event",
+            action: "result",
+            event: name,
+            result: object
+        });
+    }
+}
+
+export default {
     /**
      * Initializes the APIConnector. Setups message event listeners that will
      * receive information from external applications that embed Jitsi Meet.
      * It also sends a message to the external application that APIConnector
      * is initialized.
+     * @param options {object}
+     * @param enablePostis {boolean} if true the postis npm
+     * package for comminication with the parent window will be enabled.
+     * @param enablePostMessage {boolean} if true the postMessageAPI for
+     * comminication with the parent window will be enabled.
      */
-    init: function () {
-        initCommands();
-        if (window.addEventListener) {
-            window.addEventListener('message',
-                processMessage, false);
+    init: function (options = {}) {
+        options.enablePostMessage = options.enablePostMessage || isEnabled();
+        if (!options.enablePostis &&
+            !options.enablePostMessage) {
+            return;
         }
-        else {
-            window.attachEvent('onmessage', processMessage);
+        enablePostis = options.enablePostis;
+        enablePostMessage = options.enablePostMessage;
+
+        if(enablePostMessage) {
+            initCommands();
+            if (window.addEventListener) {
+                window.addEventListener('message', processMessage, false);
+            } else {
+                window.attachEvent('onmessage', processMessage);
+            }
+            sendMessage({type: "system", loaded: true});
         }
-        sendMessage({type: "system", loaded: true});
-        setupListeners();
-    },
-    /**
-     * Checks whether the event is enabled ot not.
-     * @param name the name of the event.
-     * @returns {*}
-     */
-    isEventEnabled: function (name) {
-        return events[name];
+
+        if(enablePostis) {
+            this.postis = postis({window: target});
+        }
     },
 
     /**
-     * Sends event object to the external application that has been subscribed
-     * for that event.
-     * @param name the name event
-     * @param object data associated with the event
+     * Notify external application (if API is enabled) that message was sent.
+     * @param {string} body message body
      */
-    triggerEvent: function (name, object) {
-        if(this.isEnabled() && this.isEventEnabled(name))
-            sendMessage({
-                type: "event", action: "result", event: name, result: object});
+    notifySendingChatMessage (body) {
+        triggerEvent("outgoingMessage", {"message": body});
+    },
+
+    /**
+     * Sends message to the external application.
+     * @param options {object}
+     * @param method {string}
+     * @param params {object} the object that will be sent as JSON string
+     */
+    sendPostisMessage(options) {
+        if(enablePostis)
+            this.postis.send(options);
+    },
+
+    /**
+     * Adds listener for Postis messages.
+     * @param method {string} postis mehtod
+     * @param listener {function}
+     */
+    addPostisMessageListener (method, listener) {
+        if(enablePostis)
+            this.postis.listen(method, listener);
+    },
+
+    /**
+     * Notify external application (if API is enabled) that
+     * message was received.
+     * @param {string} id user id
+     * @param {string} nick user nickname
+     * @param {string} body message body
+     * @param {number} ts message creation timestamp
+     */
+    notifyReceivedChatMessage (id, nick, body, ts) {
+        if (APP.conference.isLocalId(id)) {
+            return;
+        }
+
+        triggerEvent(
+            "incomingMessage",
+            {"from": id, "nick": nick, "message": body, "stamp": ts}
+        );
+    },
+
+    /**
+     * Notify external application (if API is enabled) that
+     * user joined the conference.
+     * @param {string} id user id
+     */
+    notifyUserJoined (id) {
+        triggerEvent("participantJoined", {id});
+    },
+
+    /**
+     * Notify external application (if API is enabled) that
+     * user left the conference.
+     * @param {string} id user id
+     */
+    notifyUserLeft (id) {
+        triggerEvent("participantLeft", {id});
+    },
+
+    /**
+     * Notify external application (if API is enabled) that
+     * user changed their nickname.
+     * @param {string} id user id
+     * @param {string} displayName user nickname
+     */
+    notifyDisplayNameChanged (id, displayName) {
+        triggerEvent("displayNameChange", {id, displayname: displayName});
     },
 
     /**
      * Removes the listeners.
      */
     dispose: function () {
-        if(window.removeEventListener) {
-            window.removeEventListener("message",
-                processMessage, false);
+        if (enablePostMessage) {
+            if (window.removeEventListener) {
+                window.removeEventListener("message", processMessage, false);
+            } else {
+                window.detachEvent('onmessage', processMessage);
+            }
         }
-        else {
-            window.detachEvent('onmessage', processMessage);
-        }
+        if(enablePostis)
+            this.postis.destroy();
     }
 };
-
-module.exports = API;

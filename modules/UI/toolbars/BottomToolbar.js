@@ -1,66 +1,99 @@
-/* global $ */
-var PanelToggler = require("../side_pannels/SidePanelToggler");
-var UIUtil = require("../util/UIUtil");
-var AnalyticsAdapter = require("../../statistics/AnalyticsAdapter");
-var UIEvents = require("../../../service/UI/UIEvents");
+/* global $, APP, interfaceConfig*/
+import UIUtil from '../util/UIUtil';
+import UIEvents from '../../../service/UI/UIEvents';
+import AnalyticsAdapter from '../../statistics/AnalyticsAdapter';
 
-var eventEmitter = null;
-
-var buttonHandlers = {
-    "bottom_toolbar_contact_list": function () {
-        AnalyticsAdapter.sendEvent('bottomtoolbar.contacts.toggled');
-        BottomToolbar.toggleContactList();
-    },
-    "bottom_toolbar_film_strip": function () {
-        AnalyticsAdapter.sendEvent('bottomtoolbar.filmstrip.toggled');
-        BottomToolbar.toggleFilmStrip();
-    },
-    "bottom_toolbar_chat": function () {
-        AnalyticsAdapter.sendEvent('bottomtoolbar.chat.toggled');
-        BottomToolbar.toggleChat();
-    }
-};
-
-
-var defaultBottomToolbarButtons = {
-    'chat': '#bottom_toolbar_chat',
-    'contacts': '#bottom_toolbar_contact_list',
+const defaultBottomToolbarButtons = {
+    'chat':      '#bottom_toolbar_chat',
+    'contacts':  '#bottom_toolbar_contact_list',
     'filmstrip': '#bottom_toolbar_film_strip'
 };
 
+const BottomToolbar = {
+    init () {
+        this.toolbar = $('#bottomToolbar');
 
-var BottomToolbar = (function (my) {
-    my.init = function (emitter) {
-        eventEmitter = emitter;
+        // The bottom toolbar is enabled by default.
+        this.enabled = true;
+    },
+    /**
+     * Enables / disables the bottom toolbar.
+     * @param {e} set to {true} to enable the bottom toolbar or {false}
+     * to disable it
+     */
+    enable (e) {
+        this.enabled = e;
+        if (!e && this.isVisible())
+            this.hide(false);
+    },
+    /**
+     * Indicates if the bottom toolbar is currently enabled.
+     * @return {this.enabled}
+     */
+    isEnabled() {
+        return this.enabled;
+    },
+    setupListeners (emitter) {
         UIUtil.hideDisabledButtons(defaultBottomToolbarButtons);
 
-        for(var k in buttonHandlers)
-            $("#" + k).click(buttonHandlers[k]);
-    };
+        const buttonHandlers = {
+            "bottom_toolbar_contact_list": function () {
+                AnalyticsAdapter.sendEvent('bottomtoolbar.contacts.toggled');
+                emitter.emit(UIEvents.TOGGLE_CONTACT_LIST);
+            },
+            "bottom_toolbar_film_strip": function () {
+                AnalyticsAdapter.sendEvent('bottomtoolbar.filmstrip.toggled');
+                emitter.emit(UIEvents.TOGGLE_FILM_STRIP);
+            },
+            "bottom_toolbar_chat": function () {
+                AnalyticsAdapter.sendEvent('bottomtoolbar.chat.toggled');
+                emitter.emit(UIEvents.TOGGLE_CHAT);
+            }
+        };
 
-    my.toggleChat = function() {
-        PanelToggler.toggleChat();
-    };
+        Object.keys(buttonHandlers).forEach(
+            buttonId => $(`#${buttonId}`).click(buttonHandlers[buttonId])
+        );
+    },
 
-    my.toggleContactList = function() {
-        PanelToggler.toggleContactList();
-    };
+    resizeToolbar (thumbWidth, thumbHeight) {
+        let bottom = (thumbHeight - this.toolbar.outerHeight())/2 + 18;
+        this.toolbar.css({bottom});
+    },
 
-    my.toggleFilmStrip = function() {
-        var filmstrip = $("#remoteVideos");
-        filmstrip.toggleClass("hidden");
+    /**
+     * Returns true if this toolbar is currently visible, or false otherwise.
+     * @return <tt>true</tt> if currently visible, <tt>false</tt> - otherwise
+     */
+    isVisible() {
+        return this.toolbar.is(":visible");
+    },
 
-        eventEmitter.emit(  UIEvents.FILM_STRIP_TOGGLED,
-                            filmstrip.hasClass("hidden"));
-    };
+    /**
+     * Hides the bottom toolbar with animation or not depending on the animate
+     * parameter.
+     * @param animate <tt>true</tt> to hide the bottom toolbar with animation,
+     * <tt>false</tt> or nothing to hide it without animation.
+     */
+    hide(animate) {
+        if (animate)
+            this.toolbar.hide("slide", {direction: "right", duration: 300});
+        else
+            this.toolbar.css("display", "none");
+    },
 
-    $(document).bind("remotevideo.resized", function (event, width, height) {
-        var bottom = (height - $('#bottomToolbar').outerHeight())/2 + 18;
+    /**
+     * Shows the bottom toolbar with animation or not depending on the animate
+     * parameter.
+     * @param animate <tt>true</tt> to show the bottom toolbar with animation,
+     * <tt>false</tt> or nothing to show it without animation.
+     */
+    show(animate) {
+        if (animate)
+            this.toolbar.show("slide", {direction: "right", duration: 300});
+        else
+            this.toolbar.css("display", "block");
+    }
+};
 
-        $('#bottomToolbar').css({bottom: bottom + 'px'});
-    });
-
-    return my;
-}(BottomToolbar || {}));
-
-module.exports = BottomToolbar;
+export default BottomToolbar;

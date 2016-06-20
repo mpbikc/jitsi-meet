@@ -3,42 +3,58 @@
 var shortcuts = {};
 function initShortcutHandlers() {
     shortcuts = {
+        191: {
+            character: "/",
+            function: function(e) {
+                // Only trigger on "?", not on "/".
+                if (e.shiftKey) {
+                    APP.UI.toggleKeyboardShortcutsPanel();
+                }
+            }
+        },
         67: {
             character: "C",
             id: "toggleChatPopover",
-            function: APP.UI.toggleChat
+            function: function() {
+                APP.UI.toggleChat();
+            }
         },
         68: {
             character: "D",
             id: "toggleDesktopSharingPopover",
-            function: APP.desktopsharing.toggleScreenSharing
+            function: function () {
+                APP.conference.toggleScreenSharing();
+            }
         },
         70: {
             character: "F",
             id: "filmstripPopover",
-            function: APP.UI.toggleFilmStrip
+            function: function() {
+                APP.UI.toggleFilmStrip();
+            }
         },
         77: {
             character: "M",
             id: "mutePopover",
-            function: APP.UI.toggleAudio
+            function: function() {
+                APP.conference.toggleAudioMuted();
+            }
         },
         84: {
             character: "T",
             function: function() {
-                if(!APP.RTC.localAudio.isMuted()) {
-                    APP.UI.toggleAudio();
-                }
+                APP.conference.muteAudio(true);
             }
         },
         86: {
             character: "V",
             id: "toggleVideoPopover",
-            function: APP.UI.toggleVideo
+            function: function() {
+                APP.conference.toggleVideoMuted();
+            }
         }
     };
 }
-
 
 var KeyboardShortcut = {
     init: function () {
@@ -49,7 +65,7 @@ var KeyboardShortcut = {
                 $(":focus").is("input[type=password]") ||
                 $(":focus").is("textarea"))) {
                 if (typeof shortcuts[keycode] === "object") {
-                    shortcuts[keycode].function();
+                    shortcuts[keycode].function(e);
                 }
                 else if (keycode >= "0".charCodeAt(0) &&
                     keycode <= "9".charCodeAt(0)) {
@@ -67,9 +83,8 @@ var KeyboardShortcut = {
                 $(":focus").is("input[type=password]") ||
                 $(":focus").is("textarea"))) {
                 if(e.which === "T".charCodeAt(0)) {
-                    if(APP.RTC.localAudio.isMuted()) {
-                        APP.UI.toggleAudio();
-                    }
+                    if(APP.conference.isLocalAudioMuted())
+                        APP.conference.muteAudio(false);
                 }
             }
         };

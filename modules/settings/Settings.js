@@ -1,11 +1,15 @@
-var UsernameGenerator = require('../util/UsernameGenerator');
+/* global JitsiMeetJS */
 
-var email = '';
-var displayName = '';
-var userId;
-var language = null;
-var callStatsUserName;
+import UIUtil from '../UI/util/UIUtil';
 
+let email = '';
+let displayName = '';
+let language = null;
+let cameraDeviceId = '';
+let micDeviceId = '';
+let welcomePageDisabled = false;
+let localFlipX = null;
+let avatarUrl = '';
 
 function supportsLocalStorage() {
     try {
@@ -30,40 +34,49 @@ if (supportsLocalStorage()) {
         console.log("generated id", window.localStorage.jitsiMeetId);
     }
 
-    if (!window.localStorage.callStatsUserName) {
-        window.localStorage.callStatsUserName
-            = UsernameGenerator.generateUsername();
-        console.log('generated callstats uid',
-            window.localStorage.callStatsUserName);
-
-    }
-    userId = window.localStorage.jitsiMeetId || '';
-    callStatsUserName = window.localStorage.callStatsUserName;
-    email = window.localStorage.email || '';
-    displayName = window.localStorage.displayname || '';
+    email = UIUtil.unescapeHtml(window.localStorage.email || '');
+    avatarUrl = UIUtil.unescapeHtml(window.localStorage.avatarUrl || '');
+    localFlipX = JSON.parse(window.localStorage.localFlipX || true);
+    displayName = UIUtil.unescapeHtml(window.localStorage.displayname || '');
     language = window.localStorage.language;
+    cameraDeviceId = window.localStorage.cameraDeviceId || '';
+    micDeviceId = window.localStorage.micDeviceId || '';
+    welcomePageDisabled = JSON.parse(
+        window.localStorage.welcomePageDisabled || false
+    );
+
+    // Currently audio output device change is supported only in Chrome and
+    // default output always has 'default' device ID
+    var audioOutputDeviceId = window.localStorage.audioOutputDeviceId
+        || 'default';
+
+    if (audioOutputDeviceId !==
+        JitsiMeetJS.mediaDevices.getAudioOutputDevice()) {
+        JitsiMeetJS.mediaDevices.setAudioOutputDevice(audioOutputDeviceId)
+            .catch((ex) => {
+                console.warn('Failed to set audio output device from local ' +
+                    'storage. Default audio output device will be used' +
+                    'instead.', ex);
+            });
+    }
 } else {
     console.log("local storage is not supported");
-    userId = generateUniqueId();
-    callStatsUserName = UsernameGenerator.generateUsername();
 }
 
-var Settings = {
+export default {
 
     /**
      * Sets the local user display name and saves it to local storage
      *
-     * @param newDisplayName the new display name for the local user
-     * @returns {string} the display name we just set
+     * @param {string} newDisplayName unescaped display name for the local user
      */
-    setDisplayName: function (newDisplayName) {
+    setDisplayName (newDisplayName) {
         displayName = newDisplayName;
-        window.localStorage.displayname = displayName;
-        return displayName;
+        window.localStorage.displayname = UIUtil.escapeHtml(displayName);
     },
 
     /**
-     * Returns the currently used by the user
+     * Returns the escaped display name currently used by the user
      * @returns {string} currently valid user display name.
      */
     getDisplayName: function () {
@@ -71,31 +84,134 @@ var Settings = {
     },
 
     /**
-     * Returns fake username for callstats
-     * @returns {string} fake username for callstats
+     * Sets new email for local user and saves it to the local storage.
+     * @param {string} newEmail new email for the local user
      */
-    getCallStatsUserName: function () {
-        return callStatsUserName;
-    },
-
     setEmail: function (newEmail) {
         email = newEmail;
-        window.localStorage.email = newEmail;
+        window.localStorage.email = UIUtil.escapeHtml(newEmail);
+    },
+
+    /**
+     * Returns email address of the local user.
+     * @returns {string} email
+     */
+    getEmail: function () {
         return email;
     },
 
-    getSettings: function () {
-        return {
-            email: email,
-            displayName: displayName,
-            uid: userId,
-            language: language
-        };
+    /**
+     * Sets new avatarUrl for local user and saves it to the local storage.
+     * @param {string} newAvatarUrl new avatarUrl for the local user
+     */
+    setAvatarUrl: function (newAvatarUrl) {
+        avatarUrl = newAvatarUrl;
+        window.localStorage.avatarUrl = UIUtil.escapeHtml(newAvatarUrl);
+    },
+
+    /**
+     * Returns avatarUrl address of the local user.
+     * @returns {string} avatarUrl
+     */
+    getAvatarUrl: function () {
+        return avatarUrl;
+    },
+
+
+    getLanguage () {
+        return language;
     },
     setLanguage: function (lang) {
         language = lang;
         window.localStorage.language = lang;
+    },
+
+    /**
+     * Sets new flipX state of local video and saves it to the local storage.
+     * @param {string} val flipX state of local video
+     */
+    setLocalFlipX: function (val) {
+        localFlipX = val;
+        window.localStorage.localFlipX = val;
+    },
+
+    /**
+     * Returns flipX state of local video.
+     * @returns {string} flipX
+     */
+    getLocalFlipX: function () {
+        return localFlipX;
+    },
+
+    /**
+     * Get device id of the camera which is currently in use.
+     * Empty string stands for default device.
+     * @returns {String}
+     */
+    getCameraDeviceId: function () {
+        return cameraDeviceId;
+    },
+    /**
+     * Set device id of the camera which is currently in use.
+     * Empty string stands for default device.
+     * @param {string} newId new camera device id
+     */
+    setCameraDeviceId: function (newId = '') {
+        cameraDeviceId = newId;
+        window.localStorage.cameraDeviceId = newId;
+    },
+
+    /**
+     * Get device id of the microphone which is currently in use.
+     * Empty string stands for default device.
+     * @returns {String}
+     */
+    getMicDeviceId: function () {
+        return micDeviceId;
+    },
+    /**
+     * Set device id of the microphone which is currently in use.
+     * Empty string stands for default device.
+     * @param {string} newId new microphone device id
+     */
+    setMicDeviceId: function (newId = '') {
+        micDeviceId = newId;
+        window.localStorage.micDeviceId = newId;
+    },
+
+    /**
+     * Get device id of the audio output device which is currently in use.
+     * Empty string stands for default device.
+     * @returns {String}
+     */
+    getAudioOutputDeviceId: function () {
+        return JitsiMeetJS.mediaDevices.getAudioOutputDevice();
+    },
+    /**
+     * Set device id of the audio output device which is currently in use.
+     * Empty string stands for default device.
+     * @param {string} newId='default' - new audio output device id
+     * @returns {Promise}
+     */
+    setAudioOutputDeviceId: function (newId = 'default') {
+        return JitsiMeetJS.mediaDevices.setAudioOutputDevice(newId)
+            .then(() => window.localStorage.audioOutputDeviceId = newId);
+    },
+
+    /**
+     * Check if welcome page is enabled or not.
+     * @returns {boolean}
+     */
+    isWelcomePageEnabled () {
+        return !welcomePageDisabled;
+    },
+
+    /**
+     * Enable or disable welcome page.
+     * @param {boolean} enabled if welcome page should be enabled or not
+     */
+    setWelcomePageEnabled (enabled) {
+        welcomePageDisabled = !enabled;
+        window.localStorage.welcomePageDisabled = welcomePageDisabled;
     }
 };
-
-module.exports = Settings;
